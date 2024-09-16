@@ -32,9 +32,11 @@ class ProxyApp(QWidget):
 
         self.layout_middle = QVBoxLayout()
         self.layout_buttons = QVBoxLayout()
+        self.layout_buttons.setAlignment(Qt.AlignCenter)
         self.layout_right = QVBoxLayout()
         self.layout_right.setAlignment(Qt.AlignTop)
         self.layout = QHBoxLayout()
+        self.layout.setAlignment(Qt.AlignCenter)
 
         self.preset_label_layout = QHBoxLayout()
         self.preset_label = QLabel("Пресет:")
@@ -163,7 +165,9 @@ class ProxyApp(QWidget):
 
     @staticmethod
     def get_active_apps():
-        """Получает список активных приложений с использованием psutil"""
+        """
+        Получает список активных приложений с использованием psutil
+        """
         active_apps = {}
         system_processes = ['smss.exe', 'csrss.exe', 'svchost.exe', 'wininit.exe', 'services.exe',
                             'lsass.exe', 'system', 'idle']
@@ -185,7 +189,9 @@ class ProxyApp(QWidget):
         return sorted(active_apps.keys())
 
     def parse_proxy_string(self, proxy_string):
-        """Парсит строку с данными прокси и заполняет соответствующие поля."""
+        """
+        Парсит строку с данными прокси и заполняет соответствующие поля.
+        """
         # Регулярное выражение для парсинга строки прокси
         proxy_pattern = re.compile(
             r'(?P<type>socks5|https)?://'
@@ -369,6 +375,9 @@ class ProxyApp(QWidget):
             QMessageBox.information(self, "Успех", f"Пресет '{preset_name}' удален.")
 
     def apply_settings(self):
+        """
+        Применяет текущие настройки к приложениям
+        """
         proxy_ip = self.proxy_ip_input.text()
         proxy_port = self.proxy_port_input.text()
 

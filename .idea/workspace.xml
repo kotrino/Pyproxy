@@ -4,16 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="f40af4a7-bc2a-497a-8f07-999ccff4430a" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/.idea/Pyproxy.iml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/Project_Default.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/profiles_settings.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/gui.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/protocols.py" afterDir="false" />
+    <list default="true" id="f40af4a7-bc2a-497a-8f07-999ccff4430a" name="Changes" comment="Набросал интерфейс, для прокси, нужно доделать логику загрузки проксируемых приложений, добавить возможность добавления приложений в список проксируемых по даблклику, написать логику маршрутизации пакетов">
+      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/gui.py" beforeDir="false" afterPath="$PROJECT_DIR$/gui.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -30,6 +23,18 @@
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
+  <component name="GitHubPullRequestSearchHistory"><![CDATA[{
+  "lastFilter": {
+    "state": "OPEN",
+    "assignee": "kotrino"
+  }
+}]]></component>
+  <component name="GithubPullRequestsUISettings"><![CDATA[{
+  "selectedUrlAndAccountId": {
+    "url": "https://github.com/kotrino/Pyproxy.git",
+    "accountId": "c610c3b7-d540-4e23-b155-d68cf954bc29"
+  }
+}]]></component>
   <component name="ProjectColorInfo"><![CDATA[{
   "associatedIndex": 7
 }]]></component>
@@ -45,7 +50,8 @@
   "keyToString": {
     "Python.gui.executor": "Run",
     "RunOnceActivity.ShowReadmeOnStart": "true",
-    "git-widget-placeholder": "master"
+    "git-widget-placeholder": "master",
+    "settings.editor.selected.configurable": "com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable"
   }
 }]]></component>
   <component name="RunManager">
@@ -93,6 +99,19 @@
       <option name="presentableId" value="Default" />
       <updated>1726504107592</updated>
     </task>
+    <task id="LOCAL-00001" summary="Набросал интерфейс, для прокси, нужно доделать логику загрузки проксируемых приложений, добавить возможность добавления приложений в список проксируемых по даблклику, написать логику маршрутизации пакетов">
+      <option name="closed" value="true" />
+      <created>1726515993847</created>
+      <option name="number" value="00001" />
+      <option name="presentableId" value="LOCAL-00001" />
+      <option name="project" value="LOCAL" />
+      <updated>1726515993847</updated>
+    </task>
+    <option name="localTasksCounter" value="2" />
     <servers />
+  </component>
+  <component name="VcsManagerConfiguration">
+    <MESSAGE value="Набросал интерфейс, для прокси, нужно доделать логику загрузки проксируемых приложений, добавить возможность добавления приложений в список проксируемых по даблклику, написать логику маршрутизации пакетов" />
+    <option name="LAST_COMMIT_MESSAGE" value="Набросал интерфейс, для прокси, нужно доделать логику загрузки проксируемых приложений, добавить возможность добавления приложений в список проксируемых по даблклику, написать логику маршрутизации пакетов" />
   </component>
 </project>
