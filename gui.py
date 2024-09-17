@@ -3,15 +3,59 @@ import re
 
 import psutil
 import os.path
+import threading
 
+import pydivert
+from scapy.all import *
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QLabel, QLineEdit, QPushButton,
     QRadioButton, QButtonGroup, QListWidget, QHBoxLayout, QMessageBox, QComboBox, QCheckBox, QInputDialog, QSpacerItem,
-    QSizePolicy
+    QSizePolicy, QFileDialog, QListWidgetItem
 )
 from PySide6.QtCore import Qt, QTimer
+from scapy.layers.inet import TCP, IP
 
 from protocols import make_http_request_via_proxy, make_socks_request_via_proxy
+
+import logging
+
+logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+
+
+class AppTrafficMonitor:
+    def __init__(self, pid):
+        self.pid = pid
+        self.prev_bytes_recv = 0
+        self.prev_bytes_sent = 0
+        self.total_bytes_recv = 0
+        self.total_bytes_sent = 0
+
+    def update(self):
+        try:
+            proc = psutil.Process(self.pid)
+            net_io = proc.net_io_counters()
+            bytes_recv = net_io.bytes_recv
+            bytes_sent = net_io.bytes_sent
+
+            # Если это первое измерение
+            if self.prev_bytes_recv == 0 and self.prev_bytes_sent == 0:
+                self.prev_bytes_recv = bytes_recv
+                self.prev_bytes_sent = bytes_sent
+                return 0, 0
+
+            # Вычисляем разницу
+            delta_recv = bytes_recv - self.prev_bytes_recv
+            delta_sent = bytes_sent - self.prev_bytes_sent
+
+            self.prev_bytes_recv = bytes_recv
+            self.prev_bytes_sent = bytes_sent
+
+            self.total_bytes_recv += delta_recv
+            self.total_bytes_sent += delta_sent
+
+            return delta_recv, delta_sent
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return 0, 0
 
 
 class ProxyApp(QWidget):
@@ -19,6 +63,11 @@ class ProxyApp(QWidget):
         super().__init__()
 
         self.setWindowTitle('PyProxy')
+
+        self.proxy_running = False
+        self.total_download = 0
+        self.total_upload = 0
+        self.traffic_monitors = {}
 
         self.presets_file = "proxy_presets.json"
         self.presets = self.load_presets()
@@ -28,7 +77,7 @@ class ProxyApp(QWidget):
 
         self.left_container = QWidget()
         self.left_container.setLayout(self.layout_left)
-        self.left_container.setFixedWidth(250)
+        self.left_container.setFixedWidth(270)
 
         self.layout_middle = QVBoxLayout()
         self.layout_buttons = QVBoxLayout()
@@ -64,6 +113,8 @@ class ProxyApp(QWidget):
         self.proxy_type_label = QLabel("Тип прокси:")
         self.https_radio = QRadioButton("HTTPS")
         self.socks_radio = QRadioButton("SOCKS")
+        self.encryption_checkbox = QCheckBox("Включить шифрование трафика (HTTPS)")
+        self.encryption_checkbox.setChecked(True)
         self.proxy_type_group = QButtonGroup()
         self.proxy_type_group.addButton(self.https_radio)
         self.proxy_type_group.addButton(self.socks_radio)
@@ -76,10 +127,12 @@ class ProxyApp(QWidget):
         self.active_apps_label = QLabel("Активные приложения")
         self.active_apps_list = QListWidget()
         self.active_apps_list.setSelectionMode(QListWidget.MultiSelection)
+        self.active_apps_list.itemDoubleClicked.connect(self.on_active_app_double_clicked)
 
         self.selected_apps_label = QLabel("Выбранные приложения")
         self.selected_apps_list = QListWidget()
         self.selected_apps_list.setSelectionMode(QListWidget.MultiSelection)
+        self.selected_apps_list.itemDoubleClicked.connect(self.on_selected_app_double_clicked)
 
         self.manual_app_input = QLineEdit()
         self.manual_app_input.setPlaceholderText("Введите имя приложения")
@@ -107,6 +160,25 @@ class ProxyApp(QWidget):
         self.delete_preset_button = QPushButton("Del")
         self.delete_preset_button.clicked.connect(self.delete_preset)
 
+        self.start_windows_button = QPushButton("Запустить перехват для Windows")
+        self.start_windows_button.clicked.connect(self.start_intercept_windows)
+
+        self.start_unix_button = QPushButton("Запустить перехват для Linux/Unix")
+        self.start_unix_button.clicked.connect(self.start_intercept_unix)
+
+        self.traffic_stats_label = QLabel("Статистика трафика")
+        self.traffic_stats_list = QListWidget()
+
+        self.total_traffic_label = QLabel("Общая статистика трафика")
+        self.total_traffic_display = QLabel("Сумма: 0 KB загрузки, 0 KB выгрузки")
+
+        # Добавляем в основной layout новый столбец для трафика
+        self.layout_traffic = QVBoxLayout()
+        self.layout_traffic.addWidget(self.traffic_stats_label)
+        self.layout_traffic.addWidget(self.traffic_stats_list)
+        self.layout_traffic.addWidget(self.total_traffic_label)
+        self.layout_traffic.addWidget(self.total_traffic_display)
+
         # Размещаем элементы интерфейса в основном layout
         self.preset_label_layout.addWidget(self.preset_label, stretch=1)
         self.preset_label_layout.addWidget(self.delete_preset_button)
@@ -127,9 +199,14 @@ class ProxyApp(QWidget):
         self.layout_left.addWidget(self.proxy_type_label)
         self.layout_left.addWidget(self.https_radio)
         self.layout_left.addWidget(self.socks_radio)
+        self.layout_left.addWidget(self.encryption_checkbox)
         self.layout_left.addWidget(self.proxy_string_label)
         self.layout_left.addWidget(self.proxy_string_input)
         self.layout_left.addWidget(self.parse_button)
+
+        # Добавляем кнопки в layout
+        self.layout_left.addWidget(self.start_windows_button)
+        self.layout_left.addWidget(self.start_unix_button)
 
         self.layout_middle.addWidget(self.active_apps_label)
         self.layout_middle.addWidget(self.active_apps_list, stretch=1)
@@ -148,12 +225,17 @@ class ProxyApp(QWidget):
         self.layout.addLayout(self.layout_middle)
         self.layout.addLayout(self.layout_buttons)
         self.layout.addLayout(self.layout_right)
+        self.layout.addLayout(self.layout_traffic)
         self.setLayout(self.layout)
 
         self.auto_refresh_interval = 10000
         self.timer = QTimer()
         self.timer.timeout.connect(self.load_active_apps)
         self.timer.start(self.auto_refresh_interval)
+
+        self.traffic_timer = QTimer()
+        self.traffic_timer.timeout.connect(self.update_traffic_stats)
+        self.traffic_timer.start(2000)
 
         # Загружаем активные приложения при старте
         self.load_active_apps()
@@ -187,6 +269,87 @@ class ProxyApp(QWidget):
             pass
 
         return sorted(active_apps.keys())
+
+    @staticmethod
+    def get_traffic_for_app(pid):
+        """
+        Возвращает трафик для приложения по его PID
+        """
+        try:
+            proc = psutil.Process(pid)
+            net_io = proc.net_io_counters()
+            return net_io.bytes_recv, net_io.bytes_sent
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            return 0, 0
+
+    def update_traffic_stats(self):
+        """
+        Обновляет статистику трафика для каждого выбранного приложения.
+        """
+        if not self.proxy_running:
+            return
+
+        # Очищаем предыдущие данные
+        self.traffic_stats_list.clear()
+
+        selected_apps = [self.selected_apps_list.item(i).text() for i in range(self.selected_apps_list.count())]
+        app_pids = get_app_pids(selected_apps)
+
+        total_download = 0
+        total_upload = 0
+
+        for app_name, pid in app_pids.items():
+            # Получаем или создаём монитор для данного PID
+            if pid not in self.traffic_monitors:
+                self.traffic_monitors[pid] = AppTrafficMonitor(pid)
+
+            monitor = self.traffic_monitors[pid]
+            delta_recv, delta_sent = monitor.update()
+
+            total_download += delta_recv
+            total_upload += delta_sent
+
+            item = QListWidgetItem(f"{app_name} (PID: {pid}): "
+                                   f"Загрузка: {delta_recv / 1024:.2f} KB, "
+                                   f"Выгрузка: {delta_sent / 1024:.2f} KB")
+            self.traffic_stats_list.addItem(item)
+
+            # Обновляем суммарный трафик
+        self.total_download += total_download
+        self.total_upload += total_upload
+        self.total_traffic_display.setText(f"Сумма: {self.total_download / 1024:.2f} KB загрузки, "
+                                           f"{self.total_upload / 1024:.2f} KB выгрузки")
+
+    def start_proxy(self):
+        """
+        Запускает прокси и обнуляет данные о трафике.
+        """
+        self.proxy_running = True
+        self.total_download = 0
+        self.total_upload = 0
+        self.traffic_stats_list.clear()  # Очищаем данные о трафике
+        self.total_traffic_display.setText("Сумма: 0 KB загрузки, 0 KB выгрузки")
+        # print("Прокси запущен, статистика обнулена.")
+
+    def on_active_app_double_clicked(self, item):
+        """
+        Обработчик двойного клика по элементу в списке активных приложений.
+        Добавляет приложение в список выбранных, если его там еще нет.
+        """
+        app_name = item.text()
+
+        # Проверяем, не добавлено ли приложение уже в список выбранных
+        if not any(app_name == self.selected_apps_list.item(i).text() for i in range(self.selected_apps_list.count())):
+            # Добавляем приложение в правый список выбранных приложений
+            self.selected_apps_list.addItem(app_name)
+
+    def on_selected_app_double_clicked(self, item):
+        """
+        Обработчик двойного клика по элементу в списке выбранных приложений.
+        Удаляет приложение из списка выбранных.
+        """
+        row = self.selected_apps_list.row(item)
+        self.selected_apps_list.takeItem(row)
 
     def parse_proxy_string(self, proxy_string):
         """
@@ -245,13 +408,24 @@ class ProxyApp(QWidget):
 
     def add_manual_app(self):
         """
-        Добавляет приложение вручную в список активных приложений
+        Открывает диалог выбора исполняемого файла и добавляет его в список активных приложений.
         """
-        app_name = self.manual_app_input.text().strip()
-        if app_name and not any(
-                app_name == self.active_apps_list.item(i).text() for i in range(self.active_apps_list.count())):
-            self.active_apps_list.addItem(app_name)
-        self.manual_app_input.clear()
+        # Открываем диалоговое окно для выбора файла
+        file_dialog = QFileDialog(self)
+        file_dialog.setFileMode(QFileDialog.ExistingFile)
+
+        # Ограничиваем типы файлов для выбора (например, только .exe для Windows)
+        file_dialog.setNameFilter("Executables (*.exe *.sh *.bat)")
+
+        if file_dialog.exec():
+            file_path = file_dialog.selectedFiles()[0]
+
+            # Получаем только имя файла (например, "myapp.exe")
+            app_name = os.path.basename(file_path)
+
+            # Проверяем, не добавлено ли приложение уже в список
+            if not any(app_name == self.active_apps_list.item(i).text() for i in range(self.active_apps_list.count())):
+                self.active_apps_list.addItem(app_name)  # Добавляем приложение в список
 
     def load_active_apps(self):
         """
@@ -330,8 +504,10 @@ class ProxyApp(QWidget):
 
             if preset['type'] == 'HTTPS':
                 self.https_radio.setChecked(True)
-            else:
+            elif preset.get('type') == 'SOCKS':
                 self.socks_radio.setChecked(True)
+            else:
+                self.https_radio.setChecked(True)  # HTTPS по умолчанию
 
             # Загружаем список приложений в список
             self.active_apps_list.clear()
@@ -339,10 +515,9 @@ class ProxyApp(QWidget):
             self.active_apps_list.addItems(active_apps)
 
             if 'apps' in preset:
-                for i in range(self.active_apps_list.count()):
-                    item = self.active_apps_list.item(i)
-                    if item.text() in preset['apps']:
-                        item.setSelected(True)
+                self.selected_apps_list.clear()  # Очищаем правую колонку перед загрузкой
+                for app in preset['apps']:
+                    self.selected_apps_list.addItem(app)
 
     def save_preset(self):
         """
@@ -350,7 +525,7 @@ class ProxyApp(QWidget):
         """
         preset_name, ok = QInputDialog.getText(self, "Сохранить пресет", "Введите имя пресета:")
         if ok and preset_name:
-            selected_apps = [item.text() for item in self.active_apps_list.selectedItems()]
+            selected_apps = [self.selected_apps_list.item(i).text() for i in range(self.selected_apps_list.count())]
             self.presets[preset_name] = {
                 'ip': self.proxy_ip_input.text(),
                 'port': self.proxy_port_input.text(),
@@ -374,6 +549,43 @@ class ProxyApp(QWidget):
             self.preset_combo.removeItem(self.preset_combo.currentIndex())
             QMessageBox.information(self, "Успех", f"Пресет '{preset_name}' удален.")
 
+    def start_intercept_windows(self):
+        """
+        Запуск перехвата и подмены пакетов для Windows.
+        """
+        selected_apps = [item.text() for item in self.selected_apps_list.selectedItems()]
+
+        if not selected_apps:
+            QMessageBox.warning(self, "Предупреждение", "Выберите приложения для перехвата.")
+            return
+
+        # Запуск в отдельном потоке, чтобы не блокировать интерфейс
+        def intercept():
+            intercept_packets_windows(selected_apps)
+
+        self.intercept_thread_windows = threading.Thread(target=intercept, daemon=True)
+        self.intercept_thread_windows.start()
+        self.start_proxy()
+        QMessageBox.information(self, "Успех", "Перехват пакетов для Windows запущен.")
+
+    def start_intercept_unix(self):
+        """
+        Запуск перехвата и подмены пакетов для Linux/Unix.
+        """
+        selected_apps = [item.text() for item in self.selected_apps_list.selectedItems()]
+
+        if not selected_apps:
+            QMessageBox.warning(self, "Предупреждение", "Выберите приложения для перехвата.")
+            return
+
+        # Запуск в отдельном потоке, чтобы не блокировать интерфейс
+        def intercept():
+            intercept_packets(selected_apps)
+
+        self.intercept_thread_unix = threading.Thread(target=intercept, daemon=True)
+        self.intercept_thread_unix.start()
+        QMessageBox.information(self, "Успех", "Перехват пакетов для Linux/Unix запущен.")
+
     def apply_settings(self):
         """
         Применяет текущие настройки к приложениям
@@ -389,6 +601,7 @@ class ProxyApp(QWidget):
 
         proxy_type = "HTTPS" if self.https_radio.isChecked() else "SOCKS"
         selected_apps = [item.text() for item in self.active_apps_list.selectedItems()]
+        use_encryption = self.encryption_checkbox.isChecked()
 
         if not proxy_ip or not proxy_port:
             QMessageBox.critical(self, "Ошибка", "Не заполнены обязательные поля IP и порт прокси")
@@ -411,6 +624,111 @@ class ProxyApp(QWidget):
         QMessageBox.information(self, "Успех", f"Настройки применены:"
                                                f"\n{connection_info}"
                                                f"\nПриложения: {', '.join(selected_apps)}")
+
+
+def modify_packet(packet, app_connections):
+    if is_packet_from_app_psutil(packet, app_connections):
+        if packet.haslayer(Raw):  # Если пакет содержит данные
+            payload = packet[Raw].load.decode('utf-8', errors='ignore')
+            if "GET" in payload or "POST" in payload:
+                print(f"Перехвачено HTTP-сообщение: {payload}")
+                # Пример подмены содержимого
+                modified_payload = payload.replace("example.com", "modified.com")
+                print(f"Модифицированное сообщение: {modified_payload}")
+                packet[Raw].load = modified_payload.encode('utf-8')
+
+                # Обновляем контрольные суммы
+                del packet[IP].chksum
+                del packet[TCP].chksum
+
+                # Отправляем изменённый пакет
+                send(packet)
+
+
+def intercept_packets(selected_apps):
+    # Получаем все соединения выбранных приложений
+    app_connections = get_app_connections(selected_apps)
+
+    # Перехватываем и модифицируем пакеты, если они принадлежат выбранным приложениям
+    sniff(filter="tcp", prn=lambda packet: modify_packet(packet, app_connections), iface="eth0")
+
+
+def intercept_packets_windows(selected_apps):
+    app_pids = get_app_pids(selected_apps)
+    logging.debug(f"Начало перехвата для PID: {app_pids}")
+
+    with pydivert.WinDivert("tcp.DstPort == 80 or tcp.DstPort == 443") as w:
+        for packet in w:
+            if is_packet_from_app_windows(packet, app_pids):
+                logging.debug(f"Перехвачен пакет от PID {packet.process_id}")
+                if packet.payload:
+                    try:
+                        payload = packet.payload.decode('utf-8', errors='ignore')
+
+                        if "GET" in payload or "POST" in payload:
+                            print(f"Перехвачено HTTP-сообщение: {payload}")
+                            modified_payload = payload.replace("example.com", "modified.com")
+
+                            # Убедимся, что длина данных в заголовке соответствует длине после замены
+                            headers, body = modified_payload.split("\r\n\r\n", 1)
+                            content_length = len(body.encode('utf-8'))
+                            modified_headers = re.sub(r"Content-Length: \d+", f"Content-Length: {content_length}",
+                                                      headers)
+                            modified_payload = modified_headers + "\r\n\r\n" + body
+
+                            packet.payload = modified_payload.encode('utf-8')
+
+                    except UnicodeDecodeError:
+                        pass  # Игнорируем ошибки кодировки
+
+                    w.send(packet)
+
+
+def get_app_connections(selected_apps):
+    app_pids = set()
+    app_connections = []
+
+    for proc in psutil.process_iter(['pid', 'name']):
+        if proc.info['name'] in selected_apps:
+            app_pids.add(proc.info['pid'])
+
+    # Получаем соединения для всех процессов и фильтруем по нашим PID
+    for conn in psutil.net_connections(kind='inet'):
+        if conn.pid in app_pids:
+            app_connections.append(conn)
+
+    return app_connections
+
+
+def get_app_pids(selected_apps):
+    """
+    Возвращает словарь с именами приложений и их уникальными PID.
+    """
+    app_pids = {}
+    for proc in psutil.process_iter(['pid', 'name']):
+        if proc.info['name'] in selected_apps:
+            # Если приложение уже есть в словаре, оставляем процесс с наименьшим PID
+            if proc.info['name'] not in app_pids or proc.info['pid'] < app_pids[proc.info['name']]:
+                app_pids[proc.info['name']] = proc.info['pid']
+    return app_pids
+
+
+def is_packet_from_app_psutil(packet, app_connections):
+    if packet.haslayer(IP) and packet.haslayer(TCP):
+        packet_ip = packet[IP].src
+        packet_port = packet[TCP].sport
+
+        # Проверяем, есть ли пакет в списке соединений выбранных приложений
+        for conn in app_connections:
+            if conn.laddr.ip == packet_ip and conn.laddr.port == packet_port:
+                return True
+    return False
+
+def is_packet_from_app_windows(packet, app_pids):
+    # Проверяем исходящие пакеты по PID
+    if hasattr(packet, 'ip_header') and packet.process_id in app_pids:
+        return True
+    return False
 
 
 if __name__ == "__main__":
